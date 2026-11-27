@@ -1,0 +1,163 @@
+# texcanon: how every LaTeX command / environment of the source is treated.
+#
+# Any command or environment NOT listed here is reported as an error
+# (UNKNOWN_COMMAND / UNKNOWN_ENVIRONMENT), so nothing passes the QA gate unseen.
+#
+# Argument spec letters (in order):
+#   s = optional star      o = optional [arg], not content    O = optional [arg], content
+#   m = mandatory {arg}, not content                          M = mandatory {arg}, content
+
+[language]
+base = "el"
+switches = { en = "en", gr = "el" }       # declarations: \en ... \gr
+wrappers = { textgreek = "el", textlatin = "en" }   # \textgreek{...}
+
+[commands.content]          # handled natively by Pandoc
+chapter = "sOM"
+section = "sOM"
+subsection = "sOM"
+subsubsection = "sOM"
+paragraph = "sOM"
+textit = "M"
+textbf = "M"
+emph = "M"
+texttt = "M"
+textrm = "M"
+textsf = "M"
+textsc = "M"
+textup = "M"
+textnormal = "M"
+underline = "M"
+textsuperscript = "M"
+textsubscript = "M"
+ttfamily = ""
+bf = ""
+it = ""
+em = ""
+rm = ""
+sf = ""
+tt = ""
+bfseries = ""
+itshape = ""
+mdseries = ""
+upshape = ""
+scshape = ""
+normalfont = ""
+sffamily = ""
+footnote = "OM"
+url = "M"
+href = "mM"
+item = "O"
+caption = "OM"
+includegraphics = "om"
+multicolumn = "mmM"
+hline = ""
+ldots = ""
+dots = ""
+textbackslash = ""
+LaTeX = ""
+TeX = ""
+today = ""
+
+[commands.custom]           # handled by texcanon itself (Pandoc leaves them raw)
+en = ""
+gr = ""
+textgreek = "M"
+textlatin = "M"
+index = "mM"
+label = "m"
+ref = "m"
+pageref = "m"
+eqref = "m"
+
+[commands.layout]           # page-layout only: dropped on purpose, reported as info
+color = "om"
+vspace = "sm"
+hspace = "sm"
+enlargethispage = "sm"
+noindent = ""
+indent = ""
+centering = ""
+raggedright = ""
+newpage = ""
+clearpage = ""
+cleardoublepage = ""
+eject = ""
+pagebreak = "o"
+nopagebreak = "o"
+linebreak = "o"
+newline = ""
+sectionmark = "m"
+setcounter = "mm"
+addtocounter = "mm"
+phantom = "m"
+hphantom = "m"
+vphantom = "m"
+cline = "m"
+small = ""
+footnotesize = ""
+scriptsize = ""
+large = ""
+Large = ""
+normalsize = ""
+smallskip = ""
+medskip = ""
+bigskip = ""
+vfill = ""
+hfill = ""
+protect = ""
+arabic = "m"
+thefootnote = ""
+
+[commands.space]            # replaced by a plain space
+quad = ""
+qquad = ""
+enspace = ""
+
+[commands.definition]       # \renewcommand\foo{...}: skipped entirely (macro definitions, not content)
+renewcommand = ""
+newcommand = ""
+providecommand = ""
+def = ""
+
+[commands.strip]            # blanked out before Pandoc because Pandoc leaks their argument as text
+cline = "m"
+
+[environments]
+enumerate = { class = "content", args = "o" }
+itemize = { class = "content", args = "o" }
+description = { class = "content", args = "o" }
+figure = { class = "content", args = "o" }
+"figure*" = { class = "content", args = "o" }
+table = { class = "content", args = "o" }
+center = { class = "content", args = "" }
+flushleft = { class = "content", args = "" }
+flushright = { class = "content", args = "" }
+quote = { class = "content", args = "" }
+quotation = { class = "content", args = "" }
+subfigure = { class = "content", args = "om" }
+minipage = { class = "content", args = "om" }
+small = { class = "content", args = "" }
+footnotesize = { class = "content", args = "" }
+tabular = { class = "tabular", args = "om" }
+"tabular*" = { class = "tabular", args = "mom" }
+code = { class = "verbatim", args = "o" }
+verbatim = { class = "verbatim", args = "" }
+Verbatim = { class = "verbatim", args = "o" }
+lstlisting = { class = "verbatim", args = "o" }
+defarea = { class = "container", args = "M", element = "definition" }
+equation = { class = "math" }
+"equation*" = { class = "math" }
+align = { class = "math" }
+"align*" = { class = "math" }
+gather = { class = "math" }
+"gather*" = { class = "math" }
+multline = { class = "math" }
+"multline*" = { class = "math" }
+eqnarray = { class = "math" }
+"eqnarray*" = { class = "math" }
+displaymath = { class = "math" }
+
+[qa]
+# Text that must never reach print.
+placeholders = ["List of figure caption goes here", "caption goes here", "TODO", "XXX"]
