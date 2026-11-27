@@ -108,6 +108,14 @@ def read_opt(s: str, i: int) -> tuple[int, int, int]:
     raise LatexError("μη ισορροπημένο [", i)
 
 
+def _match_cmd(s: str, k: int) -> re.Match:
+    """Control sequence at ``s[k] == '\\'``; a lone trailing backslash is an error."""
+    m = CMD_RE.match(s, k)
+    if m is None:
+        raise LatexError("λείπει το όνομα της εντολής", k)
+    return m
+
+
 @dataclass
 class Arg:
     kind: str
@@ -133,7 +141,7 @@ def read_args(s: str, i: int, spec: str) -> tuple[list[Arg], int]:
             if s[k] == "{":
                 a, b, i = read_group(s, k)
             elif s[k] == "\\":
-                m = CMD_RE.match(s, k)
+                m = _match_cmd(s, k)
                 a, b, i = k, m.end(), m.end()
             else:
                 a, b, i = k, k + 1, k + 1
@@ -279,36 +287,12 @@ class _Analyzer:
                 if m is None:
                     i += 1
                     continue
-                if m.group(1):
-                    name, j = m.group(1), m.end()
-                    if name == "begin":
-                        i = self.begin(i, j)
-                    elif name == "end":
-                        i = self.end(i, j)
-                    else:
-                        i = self.command(name, i, j, index_mode)
-                    continue
-                ch, j = m.group(3), m.end()
-                if ch == "[":
-                    i = self.math(j, s.find("\\]", j), 2, i)
-                elif ch == "(":
-                    i = self.math(j, s.find("\\)", j), 2, i)
-                elif ch in ACCENTS:
-                    i = self.accent(ch, j, i)
-                elif ch == "\\":
-                    self.sep()
-                    i = j
-                    if s[i:i + 1] == "[":
-                        _, _, k = read_opt(s, i)
-                        self.info.skip_spans.append((i, k))
-                        i = k
-                else:
-                    t = SINGLE_TEXT.get(ch, " ")
-                    if t == " ":
-                        self.sep()
-                    elif t:
-                        self.add(t, i)
-                    i = j
+                try:
+                    i = self.control(m, i, index_mode)
+                except LatexError as e:
+                    # report and go on: the rest of the source must still be analysed
+                    self.error(f"{m.group()}: {e}", e.pos)
+                    i = m.end()
                 continue
             if c == "$":
                 if s.startswith("$$", i):
@@ -333,6 +317,37 @@ class _Analyzer:
                 continue
             self.add(c, i)
             i += 1
+
+    def control(self, m: re.Match, i: int, index_mode: bool) -> int:
+        """Handle the control sequence matched at ``i``; return the next index."""
+        s = self.s
+        if m.group(1):
+            name, j = m.group(1), m.end()
+            if name == "begin":
+                return self.begin(i, j)
+            if name == "end":
+                return self.end(i, j)
+            return self.command(name, i, j, index_mode)
+        ch, j = m.group(3), m.end()
+        if ch == "[":
+            return self.math(j, s.find("\\]", j), 2, i)
+        if ch == "(":
+            return self.math(j, s.find("\\)", j), 2, i)
+        if ch in ACCENTS:
+            return self.accent(ch, j, i)
+        if ch == "\\":
+            self.sep()
+            if s[j:j + 1] == "[":
+                _, _, k = read_opt(s, j)
+                self.info.skip_spans.append((j, k))
+                return k
+            return j
+        t = SINGLE_TEXT.get(ch, " ")
+        if t == " ":
+            self.sep()
+        elif t:
+            self.add(t, i)
+        return j
 
     def math(self, a: int, k: int, dlen: int, start: int) -> int:
         if k < 0:
@@ -368,7 +383,7 @@ class _Analyzer:
         if cls == "definition":
             k = skip_ws(s, j)
             if s.startswith("\\", k):
-                k = CMD_RE.match(s, k).end()
+                k = _match_cmd(s, k).end()
             elif s[k:k + 1] == "{":
                 _, _, k = read_group(s, k)
             k2 = skip_ws(s, k)
@@ -424,7 +439,16 @@ class _Analyzer:
                 oa, ob, k2 = read_opt(s, k)
                 opts = s[oa:ob]
                 self.info.skip_spans.append((oa, ob))
-            cstart = min(eol(s, k2) + 1, e)
+            line_end, rest = eol(s, k2), k2
+            while rest < line_end and s[rest] in " \t\r":
+                rest += 1
+            if rest < min(line_end, e):
+                # LaTeX engines disagree on this text (verbatim prints it, listings
+                # drops it): keep it so nothing is lost, and let a human decide.
+                self.error(f"Κείμενο στη γραμμή του \\begin{{{name}}}: ελέγξτε αν τυπώνεται", i)
+                cstart = rest
+            else:
+                cstart = min(line_end + 1, e)
             self.sep()
             self.add(s[cstart:e], cstart)
             self.sep()
@@ -434,8 +458,8 @@ class _Analyzer:
         if cls == "math":
             endtok = "\\end{" + name + "}"
             e = s.find(endtok, k)
-            self.math(k, e, 0, i)
-            return (e + len(endtok)) if e >= 0 else len(s)
+            # the span must include \end{...}, or a line marker lands inside the math
+            return self.math(k, e, len(endtok), i)
         try:
             args, k = read_args(s, k, env.get("args", "") if env else "")
         except LatexError as ex:

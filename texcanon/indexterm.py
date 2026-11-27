@@ -20,12 +20,16 @@ class IndexTerm:
 
 
 def _split_top(s: str, sep: str) -> list[str]:
-    """Split on ``sep`` outside braces, honouring the makeindex quote char ``"``."""
+    """Split on ``sep`` outside braces, honouring the makeindex quote char ``"``.
+
+    Quoted pairs (``"!``) are kept as they are, so the result can be split again
+    on another separator; ``_unquote`` removes the quotes once, at the end.
+    """
     parts, depth, cur, i = [], 0, [], 0
     while i < len(s):
         c = s[i]
         if c == '"' and i + 1 < len(s):
-            cur.append(s[i + 1])
+            cur.append(s[i:i + 2])
             i += 2
             continue
         if c == "\\" and i + 1 < len(s):
@@ -46,6 +50,22 @@ def _split_top(s: str, sep: str) -> list[str]:
     return parts
 
 
+def _unquote(s: str) -> str:
+    """``"x`` → ``x``; ``\\"`` (the TeX umlaut accent) is left alone."""
+    out, i = [], 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            out.append(s[i:i + 2])
+            i += 2
+        elif s[i] == '"' and i + 1 < len(s):
+            out.append(s[i + 1])
+            i += 2
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
 def parse_index(arg: str) -> IndexTerm:
     term = IndexTerm()
     body, *enc = _split_top(arg, "|")
@@ -59,15 +79,16 @@ def parse_index(arg: str) -> IndexTerm:
             term.range, e = "close", e[1:]
         for kind in ("seealso", "see"):
             if e.startswith(kind + "{") and e.endswith("}"):
-                term.see_kind, term.see, e = kind, e[len(kind) + 1:-1], ""
+                term.see_kind, term.see, e = kind, _unquote(e[len(kind) + 1:-1]), ""
                 break
         term.encap = e or None
     for part in _split_top(body, "!"):
         sort_text = _split_top(part, "@")
         if len(sort_text) == 2:
-            term.levels.append(Level(text=sort_text[1].strip(), sort=sort_text[0].strip()))
+            term.levels.append(Level(text=_unquote(sort_text[1].strip()),
+                                     sort=_unquote(sort_text[0].strip())))
         elif len(sort_text) == 1:
-            term.levels.append(Level(text=part.strip()))
+            term.levels.append(Level(text=_unquote(part.strip())))
         else:
             raise ValueError(f"περισσότερα από ένα @ στο λήμμα: {arg}")
     if not any(lv.text for lv in term.levels):
