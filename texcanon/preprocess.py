@@ -68,7 +68,7 @@ def preprocess(info: SourceInfo) -> Prepared:
     no_mark += [(v.begin, v.end_after) for v in info.verbatims]
     no_mark += info.math_spans
     no_mark += [(info.lines.start(t.begin_line), info.lines.start(t.end_line) + 1) for t in info.tabulars]
-    skip = info.skip_spans
+    skip = info.skip_spans + info.raw_spans
 
     lines = s.split("\n")
     unmarked: list[int] = []

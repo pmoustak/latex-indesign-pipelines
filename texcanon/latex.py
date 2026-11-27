@@ -22,6 +22,7 @@ TOKEN_RE = re.compile("\u27e6(?:L(\\d+)|(BEGIN|TITLE|END):(\\d+))\u27e7")
 WORD_RE = re.compile(r"[^\W_]+")
 CMD_RE = re.compile(r"\\([A-Za-z@]+)(\*?)|\\(.)", re.S)
 MATH_CMD_RE = re.compile(r"\\[A-Za-z@]+")
+TEX_DEFS = frozenset({"def", "gdef", "edef", "xdef"})   # take TeX parameter text, not [n]
 
 ACCENTS = {
     "'": "\u0301", "`": "\u0300", "^": "\u0302", '"': "\u0308", "~": "\u0303",
@@ -37,6 +38,14 @@ SINGLE_TEXT = {
 
 def nfc(s: str) -> str:
     return unicodedata.normalize("NFC", s)
+
+
+def accented(ch: str, base: str) -> str:
+    """``\\'{ab}`` → "áb": the accent goes on the first letter; non-letters yield ""."""
+    base = base.strip()
+    if base and base[0].isalpha():
+        return nfc(base[0] + ACCENTS[ch]) + base[1:]
+    return ""
 
 
 def words(s: str, math: bool = False) -> list[str]:
@@ -97,6 +106,9 @@ def read_opt(s: str, i: int) -> tuple[int, int, int]:
         c = s[j]
         if c == "\\":
             j += 2
+            continue
+        if c == "%":
+            j = eol(s, j)
             continue
         if c == "{":
             depth += 1
@@ -231,6 +243,9 @@ class SourceInfo:
     skip_spans: list[tuple[int, int]] = field(default_factory=list)
     math_spans: list[tuple[int, int]] = field(default_factory=list)
     strip_spans: list[tuple[int, int]] = field(default_factory=list)
+    # content arguments of "custom" commands: Pandoc keeps them as raw LaTeX, so a
+    # line marker inside would end up in the text of e.g. an index term
+    raw_spans: list[tuple[int, int]] = field(default_factory=list)
     errors: list[tuple[str, int]] = field(default_factory=list)
 
 
@@ -244,6 +259,7 @@ class _Analyzer:
         self.buf_off: list[int] = []
         self.open_tabular: list[tuple[int, int]] = []
         self.open_containers: list[Container] = []
+        self.env_stack: list[tuple[str, int]] = []      # (name, offset of \begin)
 
     # -- content buffer
     def add(self, text: str, off: int) -> None:
@@ -268,8 +284,8 @@ class _Analyzer:
         for m in WORD_RE.finditer(joined):
             off = self.buf_off[m.start()]
             self.info.words[self.line(off)][nfc(m.group())] += 1
-        for c in self.open_containers:
-            self.error(f"Το περιβάλλον {c.env} δεν κλείνει", c.begin)
+        for name, off in self.env_stack:
+            self.error(f"Το περιβάλλον {name} δεν κλείνει", off)
         self.info.tabulars.sort(key=lambda t: t.begin_line)
         self.info.containers.sort(key=lambda c: c.begin)
         return self.info
@@ -366,12 +382,13 @@ class _Analyzer:
         s = self.s
         if s[j:j + 1] == "{":
             a, b, k = read_group(s, j)
-            base = s[a:b].strip()
+            base = s[a:b]
         else:
             k = j + 1
             base = s[j:k]
-        if base and base[0].isalpha():
-            self.add(nfc(base[0] + ACCENTS[ch]) + base[1:], i)
+        text = accented(ch, base)
+        if text:
+            self.add(text, i)
         return k
 
     def command(self, name: str, i: int, j: int, index_mode: bool) -> int:
@@ -390,6 +407,11 @@ class _Analyzer:
             while s[k2:k2 + 1] == "[":
                 _, _, k = read_opt(s, k2)
                 k2 = skip_ws(s, k)
+            if name in TEX_DEFS and s[k2:k2 + 1] != "{":
+                # TeX parameter text (#1, (#1,#2), ...) runs up to the body's "{"
+                k2 = s.find("{", k2)
+                if k2 < 0:
+                    raise LatexError("λείπει το σώμα του ορισμού", j)
             if s[k2:k2 + 1] == "{":
                 _, _, k = read_group(s, k2)
             self.info.skip_spans.append((j, k))
@@ -405,6 +427,8 @@ class _Analyzer:
             if arg.kind in "om":
                 self.info.skip_spans.append((arg.start, arg.end))
             else:
+                if cls == "custom":
+                    self.info.raw_spans.append((arg.start, arg.end))
                 self.scan(arg.start, arg.end, index_mode or name == "index")
                 self.sep()
         if name == "includegraphics":
@@ -460,6 +484,7 @@ class _Analyzer:
             e = s.find(endtok, k)
             # the span must include \end{...}, or a line marker lands inside the math
             return self.math(k, e, len(endtok), i)
+        self.env_stack.append((name, i))
         try:
             args, k = read_args(s, k, env.get("args", "") if env else "")
         except LatexError as ex:
@@ -488,6 +513,7 @@ class _Analyzer:
         a, b, k = read_group(s, k)
         name = s[a:b].strip()
         self.sep()
+        self.close_env(name, i)
         env = self.p.env(name)
         cls = env["class"] if env else None
         if cls == "tabular" and self.open_tabular:
@@ -498,6 +524,18 @@ class _Analyzer:
             c.end, c.end_after, c.end_line = i, k, self.line(i)
             self.info.containers.append(c)
         return k
+
+
+    def close_env(self, name: str, i: int) -> None:
+        """Match ``\\end{name}`` against the open environments and report mismatches."""
+        if name not in (n for n, _ in self.env_stack):
+            self.error(f"\\end{{{name}}} χωρίς αντίστοιχο \\begin{{{name}}}", i)
+            return
+        while self.env_stack:
+            open_name, off = self.env_stack.pop()
+            if open_name == name:
+                return
+            self.error(f"Το περιβάλλον {open_name} δεν κλείνει (κλείνει πρώτα το {name})", off)
 
 
 _ROW_NOISE = re.compile(r"\\(?:hline|toprule|midrule|bottomrule)(?![A-Za-z])|\\cline\s*\{[^}]*\}|%[^\n]*")
@@ -646,7 +684,7 @@ def convert_snippet(s: str, policy: Policy, lang: str) -> list[tuple] | None:
                         base = s[a:b]
                     else:
                         base, i = s[i:i + 1], i + 1
-                    text.append(nfc(base + ACCENTS[ch]))
+                    text.append(accented(ch, base))
                 elif ch in SINGLE_TEXT:
                     text.append(SINGLE_TEXT[ch])
                 else:

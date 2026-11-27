@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,13 @@ class PandocError(RuntimeError):
     pass
 
 
+def tool_dirs(tools: Path) -> list[Path]:
+    """``pandoc-<version>`` folders under ``tools``, newest version first (3.14 > 3.9)."""
+    def version(d: Path) -> tuple[int, ...]:
+        return tuple(int(x) for x in re.findall(r"\d+", d.name))
+    return sorted((d for d in tools.glob("pandoc-*") if d.is_dir()), key=version, reverse=True)
+
+
 def find_pandoc(configured: str | None = None, base: Path | None = None) -> Path:
     """Configured path → $TEXCANON_PANDOC → La2X2In/tools/pandoc-*/ → PATH."""
     candidates: list[Path] = []
@@ -25,7 +33,7 @@ def find_pandoc(configured: str | None = None, base: Path | None = None) -> Path
         candidates.append(Path(os.environ["TEXCANON_PANDOC"]))
     tools = REPO_ROOT.parent / "tools"
     if tools.is_dir():
-        for d in sorted(tools.glob("pandoc-*"), reverse=True):
+        for d in tool_dirs(tools):
             candidates += [d / "pandoc.exe", d / "pandoc"]
     found = shutil.which("pandoc")
     if found:
